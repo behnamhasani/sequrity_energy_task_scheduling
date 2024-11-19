@@ -1,179 +1,159 @@
+function [makespan, loadBalance, avgSecurityLevel, totalEnergyCost] = gagwo(tasks, VMs, maxIterations)
+    numTasks = length(tasks.executionTime);
+    numVMs = length(VMs.capacity.CPU);
+    VarSize = numTasks;      
+    VarMin = 1;              % Minimum Value (VM Index)
+    VarMax = numVMs;         % Maximum Value (VM Index)
+    nPop = 30;               % Population Size
+    Pc = 0.7;                % Crossover Probability
+    Pm = 0.3;                % Mutation Probability
+    beta = 1.5;              % Mutation Rate
+    nCrossover = round(Pc * nPop / 2) * 2;  % Number of Crossover Pairs
+    nMutation = round(Pm * nPop);           % Number of Mutants
 
-nTasks = 10;                % Number of Tasks
-nMachines = 5;             % Number of Machines
-VarSize = [1 nTasks];      % Size of  task assigned to a machine
-VarMin = 1;                % Lower Bound of Variables 
-VarMax = nMachines;        % Upper Bound of Variables 
+    empty_individual.Position = [];
+    empty_individual.Cost = inf;
+    empty_individual.Makespan = inf;
+    empty_individual.Energy = inf;
+    empty_individual.Security = inf;
+    empty_individual.LoadBalance = inf;
+    pop = repmat(empty_individual, nPop, 1);
 
-% GAGWO Parameters
-MaxIt = 100;              % Maximum Number of Iterations
-nPop = 30;                % Population Size
-Pc = 0.7;                 % Crossover Probability
-Pm = 0.3;                 % Mutation Probability
-beta = 1.5;               % Mutation Rate
-nCrossover = round(Pc * nPop / 2) * 2;  % Number of Crossover Pairs
-nMutation = round(Pm * nPop);           % Number of Mutants
+    % Initialize Metrics
+    bestMakespan = inf;
+    totalEnergyCost = 0;
+    totalSecurityMetric = 0;
+    bestLoadBalance = 0;
 
-% Grey Wolf Optimizer Parameters
-alpha = struct('Position', [], 'Cost', inf);
-betaStruct = struct('Position', [], 'Cost', inf);
-delta = struct('Position', [], 'Cost', inf);
-
-empty_individual.Position = [];
-empty_individual.Cost = [];
-pop = repmat(empty_individual, nPop, 1);
-
-% Initialize Population
-for i = 1:nPop
-    pop(i).Position = randi([VarMin, VarMax], VarSize);
-    pop(i).Cost = ObjectiveFunction(pop(i).Position);
-    % Update Alpha, betaStruct, Delta
-    if pop(i).Cost < alpha.Cost
-        delta = betaStruct;
-        betaStruct = alpha;
-        alpha = pop(i);
-    elseif pop(i).Cost < betaStruct.Cost
-        delta = betaStruct;
-        betaStruct = pop(i);
-    elseif pop(i).Cost < delta.Cost
-        delta = pop(i);
+    % Initialize Population
+    for i = 1:nPop
+        pop(i).Position = randi([VarMin, VarMax], [1, VarSize]);  
+        [pop(i).Cost, pop(i).Makespan, pop(i).Energy, pop(i).Security, pop(i).LoadBalance] = ...
+            EvaluateFitness(pop(i).Position, tasks, VMs);  
     end
+
+    % Main GAGWO Loop
+    for iter = 1:maxIterations
+        for i = 1:nPop
+            [pop(i).Cost, makespan, energy, security, loadBalance] = EvaluateFitness(pop(i).Position, tasks, VMs);
+
+            bestMakespan = min(bestMakespan, makespan);
+            totalEnergyCost = totalEnergyCost + energy;
+            totalSecurityMetric = totalSecurityMetric + security;
+            bestLoadBalance = max(bestLoadBalance, loadBalance);
+        end
+
+        popCrossover = repmat(empty_individual, nCrossover, 1);
+        for k = 1:2:nCrossover
+            i1 = randi(nPop);
+            i2 = randi(nPop);
+
+            [popCrossover(k).Position, popCrossover(k + 1).Position] = ...
+                Crossover(pop(i1).Position, pop(i2).Position);
+
+            [popCrossover(k).Cost, popCrossover(k).Makespan, popCrossover(k).Energy, ...
+                popCrossover(k).Security, popCrossover(k).LoadBalance] = ...
+                EvaluateFitness(popCrossover(k).Position, tasks, VMs);
+
+            [popCrossover(k + 1).Cost, popCrossover(k + 1).Makespan, ...
+                popCrossover(k + 1).Energy, popCrossover(k + 1).Security, ...
+                popCrossover(k + 1).LoadBalance] = ...
+                EvaluateFitness(popCrossover(k + 1).Position, tasks, VMs);
+        end
+
+        popMutation = repmat(empty_individual, nMutation, 1);
+        for k = 1:nMutation
+            i = randi(nPop);
+            popMutation(k).Position = Mutate(pop(i).Position, beta, VarMin, VarMax);
+            [popMutation(k).Cost, popMutation(k).Makespan, popMutation(k).Energy, ...
+                popMutation(k).Security, popMutation(k).LoadBalance] = ...
+                EvaluateFitness(popMutation(k).Position, tasks, VMs);
+        end
+
+        pop = [pop; popCrossover; popMutation];
+
+        [~, sortIdx] = sort([pop.Cost]);
+        pop = pop(sortIdx);
+
+        % Retain Top Individuals
+        pop = pop(1:nPop);
+    end
+
+    makespan = bestMakespan;
+    loadBalance = bestLoadBalance;
+    avgSecurityLevel = totalSecurityMetric / maxIterations;
+    totalEnergyCost = totalEnergyCost;
 end
 
-% GAGWO Main Loop
-BestCosts = nan(MaxIt, 1);
+function [fitness, makespan, energy, security, loadBalance] = EvaluateFitness(positionMatrix, tasks, VMs)
+    makespan = CalculateMakespan(positionMatrix, tasks, VMs);
+    energy = CalculateEnergyConsumption(positionMatrix, tasks, VMs);
+    security = CalculateSecurityBias(positionMatrix, tasks, VMs);
+    loadBalance = CalculateLoadBalance(positionMatrix, tasks, VMs);
 
-for it = 1:MaxIt
-    
-   
-    a = 2 - it * (2 / MaxIt);
-    
-    for i = 1:nPop
-        A1 = 2 * a * rand(VarSize) - a;
-        C1 = 2 * rand(VarSize);
-        D_alpha = abs(C1 .* alpha.Position - pop(i).Position);
-        X1 = alpha.Position - A1 .* D_alpha;
-        
-        A2 = 2 * a * rand(VarSize) - a;
-        C2 = 2 * rand(VarSize);
-        D_beta = abs(C2 .* betaStruct.Position - pop(i).Position);
-        X2 = betaStruct.Position - A2 .* D_beta;
-        
-        A3 = 2 * a * rand(VarSize) - a;
-        C3 = 2 * rand(VarSize);
-        D_delta = abs(C3 .* delta.Position - pop(i).Position);
-        X3 = delta.Position - A3 .* D_delta;
-        
-        % Update Position (Discrete Assignment)
-        newPosition = round((X1 + X2 + X3) / 3);
-        newPosition = max(newPosition, VarMin);
-        newPosition = min(newPosition, VarMax);
-        pop(i).Position = newPosition;
-        
-        
-        pop(i).Cost = ObjectiveFunction(pop(i).Position);
-        
-        % Update Alpha, betaStruct, Delta
-        if pop(i).Cost < alpha.Cost
-            delta = betaStruct;
-            betaStruct = alpha;
-            alpha = pop(i);
-        elseif pop(i).Cost < betaStruct.Cost
-            delta = betaStruct;
-            betaStruct = pop(i);
-        elseif pop(i).Cost < delta.Cost
-            delta = pop(i);
+    wMakespan = 0.4;  
+    wEnergy = 0.3;    
+    wSecurity = 0.2;  
+    wLoadBalance = 0.1;  
+
+    fitness = wMakespan * makespan + wEnergy * energy + wSecurity * security - wLoadBalance * loadBalance;
+end
+
+function makespan = CalculateMakespan(positionMatrix, tasks, VMs)
+    vmCompletionTimes = zeros(1, length(VMs.capacity.CPU));  
+    for vm = 1:length(VMs.capacity.CPU)
+        assignedTasks = find(positionMatrix == vm); 
+        for task = assignedTasks
+            adjustedExecutionTime = tasks.executionTime(task) * (tasks.resource.CPU(task) / VMs.capacity.CPU(vm));
+            vmCompletionTimes(vm) = vmCompletionTimes(vm) + adjustedExecutionTime;
         end
     end
-    
-    % Crossover
-    popc = repmat(empty_individual, nCrossover / 2, 2);
-    for k = 1:nCrossover / 2
-        i1 = randi([1 nPop]);
-        i2 = randi([1 nPop]);
-        
-        p1 = pop(i1);
-        p2 = pop(i2);
-        
-        [popc(k, 1).Position, popc(k, 2).Position] = Crossover(p1.Position, p2.Position);
-        
-        popc(k, 1).Cost = ObjectiveFunction(popc(k, 1).Position);
-        popc(k, 2).Cost = ObjectiveFunction(popc(k, 2).Position);
-    end
-    popc = popc(:);
-    
-    % Mutation
-    popm = repmat(empty_individual, nMutation, 1);
-    for k = 1:nMutation
-        i = randi([1 nPop]);
-        p = pop(i);
-        
-        popm(k).Position = Mutate(p.Position, beta, VarMin, VarMax);
-        popm(k).Cost = ObjectiveFunction(popm(k).Position);
-    end
-    
-    % Merge
-    pop = [pop
-           popc
-           popm];
-       
-    % Sort Population
-    [~, SortOrder] = sort([pop.Cost]);
-    pop = pop(SortOrder);
-    
-    % Truncate Extra Members
-    pop = pop(1:nPop);
-    
-    % Store Best Cost
-    BestCosts(it) = alpha.Cost;
-    
-    % Display Iteration Information
-    disp(['Iteration ' num2str(it) ': Best Cost = ' num2str(BestCosts(it))]);
-    
+    makespan = max(vmCompletionTimes); 
 end
 
-
-figure;
-plot(BestCosts, 'LineWidth', 2);
-xlabel('Iteration');
-ylabel('Best Cost');
-grid on;
-
-
-function cost = ObjectiveFunction(schedule)
-    
-    nMachines = 5; % Example number of machines
-    taskTimes = [2, 4, 6, 3, 7, 5, 8, 4, 9, 3]; % Example task processing times
-    machineTimes = zeros(1, nMachines);
-    
-    for i = 1:length(schedule)
-        machine = schedule(i);
-        machineTimes(machine) = machineTimes(machine) + taskTimes(i);
+function energy = CalculateEnergyConsumption(positionMatrix, tasks, VMs)
+    energy = 0;
+    for vm = 1:length(VMs.capacity.CPU)
+        assignedTasks = find(positionMatrix == vm);
+        T_busy = sum(tasks.executionTime(assignedTasks));
+        energy_busy = VMs.power.busy(vm) * T_busy;
+        energy = energy + energy_busy;
     end
-    
-    
-    cost = max(machineTimes);
 end
 
-% Crossover Function
+function security = CalculateSecurityBias(positionMatrix, tasks, VMs)
+    security = 0;
+    for task = 1:length(tasks.executionTime)
+        vm = positionMatrix(task);
+        confidentialityOverhead = tasks.sensitivity.confidentiality(task) * (1 - VMs.trustLevel(vm));
+        integrityOverhead = tasks.sensitivity.integrity(task) * (1 - VMs.trustLevel(vm));
+        authenticationOverhead = tasks.sensitivity.authentication(task) * (1 - VMs.trustLevel(vm));
+        security = security + (confidentialityOverhead + integrityOverhead + authenticationOverhead);
+    end
+end
+
+function loadBalance = CalculateLoadBalance(positionMatrix, tasks, VMs)
+    vmLoad.CPU = zeros(1, length(VMs.capacity.CPU));
+    for vm = 1:length(VMs.capacity.CPU)
+        assignedTasks = find(positionMatrix == vm);
+        vmLoad.CPU(vm) = sum(tasks.resource.CPU(assignedTasks));
+    end
+    avgCpuUtilization = mean(vmLoad.CPU ./ VMs.capacity.CPU);
+    cpuImbalance = sum((vmLoad.CPU ./ VMs.capacity.CPU - avgCpuUtilization).^2);
+    loadBalance = 1 / (1 + cpuImbalance);
+end
+
 function [y1, y2] = Crossover(x1, x2)
     alpha = rand(size(x1));
-    y1 = round(alpha.*x1 + (1-alpha).*x2);
-    y2 = round(alpha.*x2 + (1-alpha).*x1);
+    y1 = round(alpha .* x1 + (1 - alpha) .* x2);
+    y2 = round(alpha .* x2 + (1 - alpha) .* x1);
 end
-
 
 function y = Mutate(x, mu, VarMin, VarMax)
-    nVar = numel(x);
-    nMu = ceil(mu * nVar);
-    
-    j = randperm(nVar);
-    nMu = min(nMu, nVar);
-j = j(1:nMu);
-    
+    nVar = numel(x);  
+    nMu = min(ceil(mu * nVar), nVar);  
+    j = randperm(nVar, nMu);  
     y = x;
-    y(j) = randi([VarMin, VarMax], size(j));
-    
-    y = max(y, VarMin);
-    y = min(y, VarMax);
+    y(j) = randi([VarMin, VarMax], size(j));  
 end
+
